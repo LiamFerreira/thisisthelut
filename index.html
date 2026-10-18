@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BatchLUT – Colour grade a whole folder at once</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+:root{--bg:#f4f3f0;--panel:#fff;--ink:#1b1b1d;--mute:#6d6d72;--line:#dcdad5;--acc:#d9531e;--acc-ink:#fff;--thumb:#e6e4df;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141415;--panel:#1d1d20;--ink:#ececee;--mute:#8c8c93;--line:#303035;--acc:#ff7a3d;--acc-ink:#1a0d05;--thumb:#101011}}
+:root[data-theme="dark"]{--bg:#141415;--panel:#1d1d20;--ink:#ececee;--mute:#8c8c93;--line:#303035;--acc:#ff7a3d;--acc-ink:#1a0d05;--thumb:#101011}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+h1{margin:0;font-size:20px;letter-spacing:-.02em}h1 b{color:var(--acc)}
+header span{color:var(--mute)}
+.app{display:grid;grid-template-columns:320px 1fr;gap:20px;padding:20px 24px;max-width:1500px;margin:0 auto}
+@media(max-width:860px){.app{grid-template-columns:1fr;padding:14px}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+h2{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute)}
+.drop{border:2px dashed var(--line);border-radius:10px;padding:18px;text-align:center;color:var(--mute);cursor:pointer;transition:.15s}
+.drop.over,.drop:hover{border-color:var(--acc);color:var(--ink)}
+label{display:block;margin:12px 0 4px;font-size:13px}
+select,input[type=range]{width:100%}
+select{padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:9px 14px}
+button.pri{background:var(--acc);color:var(--acc-ink);border-color:var(--acc);font-weight:600;width:100%;padding:12px}
+button:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;justify-content:space-between;gap:8px;align-items:center}
+.small{font-size:12px;color:var(--mute)}
+#stage{background:var(--thumb);border-radius:12px;min-height:320px;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;border:1px solid var(--line)}
+#preview{max-width:100%;max-height:68vh;display:block}
+#empty{position:absolute;color:var(--mute);text-align:center;padding:20px}
+.bar{display:flex;gap:10px;margin:12px 0;flex-wrap:wrap;align-items:center}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.th{position:relative;background:var(--thumb);border:2px solid transparent;border-radius:8px;overflow:hidden;cursor:pointer;aspect-ratio:1}
+.th.sel{border-color:var(--acc)}
+.th canvas{width:100%;height:100%;object-fit:cover;display:block}
+.th .x{position:absolute;top:4px;right:4px;width:22px;height:22px;padding:0;border-radius:50%;line-height:1;background:rgba(0,0,0,.6);color:#fff;border:0}
+.th .n{position:absolute;bottom:0;left:0;right:0;font-size:11px;padding:3px 6px;background:rgba(0,0,0,.55);color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+progress{width:100%;height:8px;accent-color:var(--acc)}
+.err{color:#d33;font-size:12px;margin-top:6px}
+</style>
+</head>
+<body>
+<header><h1>Batch<b>LUT</b></h1><span>Load a .cube LUT, drop in your photos, grade them all in one go. Everything runs in your browser – nothing is uploaded.</span></header>
+<div class="app">
+<aside>
+  <div class="card">
+    <h2>1 · LUTs (.cube)</h2>
+    <div class="drop" id="lutDrop">Drop .cube files or click to browse</div>
+    <input type="file" id="lutIn" accept=".cube" multiple hidden>
+    <label for="lutSel">Active LUT</label>
+    <select id="lutSel"><option value="-1">None (original)</option></select>
+    <button id="rmLut" disabled style="margin-top:8px;width:100%">Remove LUT (back to original)</button>
+    <div class="err" id="lutErr"></div>
+    <label>Intensity <span id="intV" class="small">100%</span></label>
+    <input type="range" id="intens" min="0" max="100" value="100">
+  </div>
+  <div class="card">
+    <h2>3 · Export</h2>
+    <label for="fmt">Format</label>
+    <select id="fmt"><option value="image/jpeg">JPEG</option><option value="image/png">PNG (lossless)</option><option value="image/webp">WebP</option></select>
+    <label>Quality <span id="qV" class="small">92</span></label>
+    <input type="range" id="qual" min="50" max="100" value="92">
+    <label for="size">Longest edge</label>
+    <select id="size"><option value="0">Original size</option><option value="4096">4096 px</option><option value="2560">2560 px</option><option value="1600">1600 px</option><option value="1080">1080 px</option></select>
+    <div style="height:14px"></div>
+    <button class="pri" id="go" disabled>Apply to all &amp; download</button>
+    <progress id="prog" value="0" max="1" hidden></progress>
+    <div class="small" id="status"></div>
+  </div>
+</aside>
+<main>
+  <div class="card">
+    <h2>2 · Images</h2>
+    <div class="drop" id="imgDrop">Drop photos here or click to browse (JPEG, PNG, WebP)</div>
+    <input type="file" id="imgIn" accept="image/*" multiple hidden>
+  </div>
+  <div id="stage"><div id="empty">Preview appears here</div><canvas id="preview" hidden></canvas></div>
+  <div class="bar">
+    <button id="cmp" disabled>Hold to compare original</button>
+    <button id="clear" disabled>Clear all images</button>
+    <span class="small" id="count"></span>
+  </div>
+  <div id="grid"></div>
+</main>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const luts=[],imgs=[];let sel=-1,cur=-1,comparing=false;
+
+/* ---------- WebGL2 renderer ---------- */
+const gc=document.createElement('canvas');
+const gl=gc.getContext('webgl2',{preserveDrawingBuffer:true,premultipliedAlpha:false,antialias:false});
+if(!gl){document.body.innerHTML='<p style="padding:30px">This tool needs WebGL2, which your browser doesn’t support. Try a current version of Chrome, Edge, Firefox or Safari.</p>';throw 0}
+const VS=`#version 300 es
+in vec2 p;out vec2 uv;void main(){uv=p*.5+.5;gl_Position=vec4(p,0,1);}`;
+const FS=`#version 300 es
+precision highp float;precision highp sampler3D;
+in vec2 uv;out vec4 o;uniform sampler2D img;uniform sampler3D lut;
+uniform float k,n;uniform vec3 dmin,dmax;
+void main(){vec3 c=texture(img,vec2(uv.x,1.-uv.y)).rgb;
+vec3 t=clamp((c-dmin)/(dmax-dmin),0.,1.);t=t*((n-1.)/n)+.5/n;
+vec3 g=texture(lut,t).rgb;o=vec4(mix(c,g,k),1.);}`;
+function sh(t,s){const x=gl.createShader(t);gl.shaderSource(x,s);gl.compileShader(x);if(!gl.getShaderParameter(x,gl.COMPILE_STATUS))throw gl.getShaderInfoLog(x);return x}
+const pg=gl.createProgram();gl.attachShader(pg,sh(gl.VERTEX_SHADER,VS));gl.attachShader(pg,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(pg);gl.useProgram(pg);
+const vb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,vb);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+const pl=gl.getAttribLocation(pg,'p');gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,2,gl.FLOAT,false,0,0);
+const U=n=>gl.getUniformLocation(pg,n);
+const imgTex=gl.createTexture(),lutTex=gl.createTexture();
+gl.uniform1i(U('img'),0);gl.uniform1i(U('lut'),1);
+const MAXT=gl.getParameter(gl.MAX_TEXTURE_SIZE);
+
+function uploadLut(l){
+  const N=l?l.n:2,d=l?l.data:identity();
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_3D,lutTex);
+  gl.texImage3D(gl.TEXTURE_3D,0,gl.RGBA16F,N,N,N,0,gl.RGBA,gl.FLOAT,d);
+  for(const a of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_3D,a,gl.LINEAR);
+  for(const a of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T,gl.TEXTURE_WRAP_R])gl.texParameteri(gl.TEXTURE_3D,a,gl.CLAMP_TO_EDGE);
+  gl.uniform1f(U('n'),N);
+  gl.uniform3fv(U('dmin'),l?l.dmin:[0,0,0]);gl.uniform3fv(U('dmax'),l?l.dmax:[1,1,1]);
+}
+function identity(){const d=new Float32Array(32);for(let i=0;i<8;i++){d[i*4]=i&1;d[i*4+1]=(i>>1)&1;d[i*4+2]=(i>>2)&1;d[i*4+3]=1}return d}
+let loadedBmp=null;
+function render(bmp,w,h,k){
+  gc.width=w;gc.height=h;gl.viewport(0,0,w,h);
+  if(loadedBmp!==bmp){
+    let src=bmp;
+    if(bmp.width>MAXT||bmp.height>MAXT){const s=MAXT/Math.max(bmp.width,bmp.height),c=document.createElement('canvas');c.width=bmp.width*s|0;c.height=bmp.height*s|0;c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);src=c}
+    gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,imgTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,src);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    loadedBmp=bmp;
+  }
+  gl.uniform1f(U('k'),k);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+}
+
+/* ---------- .cube parser ---------- */
+function parseCube(txt){
+  let n=0,dmin=[0,0,0],dmax=[1,1,1],title='',vals=[];
+  for(let line of txt.split(/\r?\n/)){
+    line=line.trim();if(!line||line[0]==='#')continue;
+    const p=line.split(/\s+/),key=p[0].toUpperCase();
+    if(key==='TITLE')title=line.slice(5).replace(/"/g,'').trim();
+    else if(key==='LUT_3D_SIZE')n=+p[1];
+    else if(key==='LUT_1D_SIZE')throw new Error('1D LUTs aren’t supported – use a 3D .cube file');
+    else if(key==='DOMAIN_MIN')dmin=p.slice(1,4).map(Number);
+    else if(key==='DOMAIN_MAX')dmax=p.slice(1,4).map(Number);
+    else if(/^[-+\d.]/.test(line)&&p.length>=3)vals.push(+p[0],+p[1],+p[2]);
+  }
+  if(!n)throw new Error('No LUT_3D_SIZE found');
+  if(vals.length!==n*n*n*3)throw new Error(`Expected ${n*n*n} entries, found ${vals.length/3}`);
+  const data=new Float32Array(n*n*n*4);
+  for(let i=0;i<n*n*n;i++){data[i*4]=vals[i*3];data[i*4+1]=vals[i*3+1];data[i*4+2]=vals[i*3+2];data[i*4+3]=1}
+  return{n,dmin,dmax,data,title};
+}
+async function addLuts(files){
+  $('lutErr').textContent='';
+  for(const f of files){
+    try{const l=parseCube(await f.text());l.name=l.title||f.name.replace(/\.cube$/i,'');luts.push(l)}
+    catch(e){$('lutErr').textContent=`${f.name}: ${e.message}`}
+  }
+  $('lutSel').innerHTML='<option value="-1">None (original)</option>'+luts.map((l,i)=>`<option value="${i}">${l.name.replace(/</g,'&lt;')} (${l.n}³)</option>`).join('');
+  if(luts.length){sel=luts.length-1;$('lutSel').value=sel;applyLut()}
+}
+function applyLut(){uploadLut(sel>=0?luts[sel]:null);$('rmLut').disabled=sel<0;refresh()}
+
+/* ---------- images ---------- */
+async function addImages(files){
+  for(const f of files){
+    if(!f.type.startsWith('image/'))continue;
+    try{
+      const bmp=await createImageBitmap(f);
+      const el=document.createElement('div');el.className='th';
+      const cv=document.createElement('canvas');
+      const nm=document.createElement('div');nm.className='n';nm.textContent=f.name;
+      const x=document.createElement('button');x.className='x';x.textContent='×';x.title='Remove';
+      el.append(cv,nm,x);
+      const item={f,bmp,el,cv};imgs.push(item);
+      el.onclick=()=>{cur=imgs.indexOf(item);refresh()};
+      x.onclick=e=>{e.stopPropagation();const i=imgs.indexOf(item);imgs.splice(i,1);el.remove();bmp.close&&bmp.close();if(loadedBmp===bmp)loadedBmp=null;if(cur>=imgs.length)cur=imgs.length-1;refresh()};
+      $('grid').append(el);if(cur<0)cur=0;
+    }catch(e){console.warn('Skipped',f.name)}
+  }
+  refresh();
+}
+let pending=false;
+function refresh(){if(pending)return;pending=true;requestAnimationFrame(()=>{pending=false;draw()})}
+function draw(){
+  const has=imgs.length>0,k=comparing?0:$('intens').value/100;
+  $('go').disabled=!has;$('clear').disabled=!has;$('cmp').disabled=!has;
+  $('count').textContent=has?`${imgs.length} image${imgs.length>1?'s':''} loaded`:'';
+  $('empty').hidden=has;$('preview').hidden=!has;
+  imgs.forEach((it,i)=>{
+    it.el.classList.toggle('sel',i===cur);
+    const s=220/Math.max(it.bmp.width,it.bmp.height),w=Math.max(1,it.bmp.width*s|0),h=Math.max(1,it.bmp.height*s|0);
+    render(it.bmp,w,h,$('intens').value/100);
+    it.cv.width=w;it.cv.height=h;it.cv.getContext('2d').drawImage(gc,0,0);
+  });
+  if(!has)return;
+  const it=imgs[Math.max(0,cur)],s=Math.min(1,1600/Math.max(it.bmp.width,it.bmp.height));
+  const w=it.bmp.width*s|0,h=it.bmp.height*s|0,pv=$('preview');
+  render(it.bmp,w,h,k);pv.width=w;pv.height=h;pv.getContext('2d').drawImage(gc,0,0);
+}
+
+/* ---------- batch export ---------- */
+const blobOf=(type,q)=>new Promise(r=>gc.toBlob(r,type,q));
+async function exportAll(){
+  const type=$('fmt').value,q=$('qual').value/100,max=+$('size').value,k=$('intens').value/100;
+  const ext={'image/jpeg':'jpg','image/png':'png','image/webp':'webp'}[type];
+  const lutName=sel>=0?luts[sel].name.replace(/[^\w\-]+/g,'_'):'original';
+  const zip=new JSZip(),used=new Set(),prog=$('prog');
+  $('go').disabled=true;prog.hidden=false;prog.max=imgs.length;prog.value=0;
+  let single=null;
+  for(let i=0;i<imgs.length;i++){
+    const {bmp,f}=imgs[i];$('status').textContent=`Grading ${i+1} of ${imgs.length}…`;
+    await new Promise(r=>setTimeout(r));
+    const s=max?Math.min(1,max/Math.max(bmp.width,bmp.height)):1;
+    render(bmp,Math.max(1,bmp.width*s|0),Math.max(1,bmp.height*s|0),k);
+    const blob=await blobOf(type,q);
+    let base=f.name.replace(/\.[^.]+$/,'')+'_'+lutName,nm=base+'.'+ext,c=1;
+    while(used.has(nm))nm=`${base}_${c++}.${ext}`;
+    used.add(nm);zip.file(nm,blob);single={nm,blob};prog.value=i+1;
+  }
+  let out,name;
+  if(imgs.length===1){out=single.blob;name=single.nm}
+  else{$('status').textContent='Zipping…';out=await zip.generateAsync({type:'blob',compression:'STORE'});name=`graded_${lutName}.zip`}
+  const a=document.createElement('a');a.href=URL.createObjectURL(out);a.download=name;a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  $('status').textContent=`Done – ${imgs.length} image${imgs.length>1?'s':''} exported.`;
+  $('go').disabled=false;prog.hidden=true;loadedBmp=null;refresh();
+}
+
+/* ---------- wiring ---------- */
+function dz(zone,input,fn){
+  zone.onclick=()=>input.click();input.onchange=()=>{fn([...input.files]);input.value=''};
+  zone.ondragover=e=>{e.preventDefault();zone.classList.add('over')};
+  zone.ondragleave=()=>zone.classList.remove('over');
+  zone.ondrop=e=>{e.preventDefault();zone.classList.remove('over');fn([...e.dataTransfer.files])};
+}
+dz($('lutDrop'),$('lutIn'),fs=>addLuts(fs.filter(f=>/\.cube$/i.test(f.name))));
+dz($('imgDrop'),$('imgIn'),addImages);
+$('lutSel').onchange=e=>{sel=+e.target.value;applyLut()};
+$('rmLut').onclick=()=>{
+  if(sel<0)return;
+  luts.splice(sel,1);sel=-1;
+  $('lutSel').innerHTML='<option value="-1">None (original)</option>'+luts.map((l,i)=>`<option value="${i}">${l.name.replace(/</g,'&lt;')} (${l.n}³)</option>`).join('');
+  $('lutSel').value=-1;$('lutErr').textContent='';applyLut();
+};
+$('intens').oninput=e=>{$('intV').textContent=e.target.value+'%';refresh()};
+$('qual').oninput=e=>$('qV').textContent=e.target.value;
+$('fmt').onchange=e=>$('qual').disabled=e.target.value==='image/png';
+$('go').onclick=exportAll;
+$('clear').onclick=()=>{imgs.splice(0).forEach(i=>i.bmp.close&&i.bmp.close());$('grid').innerHTML='';cur=-1;loadedBmp=null;refresh()};
+const cmp=$('cmp');
+['pointerdown'].forEach(ev=>cmp.addEventListener(ev,()=>{comparing=true;refresh()}));
+['pointerup','pointerleave','pointercancel'].forEach(ev=>cmp.addEventListener(ev,()=>{if(comparing){comparing=false;refresh()}}));
+uploadLut(null);
+</script>
+</body>
+</html>
